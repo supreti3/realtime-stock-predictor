@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+streamlit
+pandas
+numpy
+plotly
+scikit-learn
+yfinance
+requests
+xgboost
+prophet
+tensorflow
