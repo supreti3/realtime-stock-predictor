@@ -55,6 +55,20 @@ def _safe_float(value: Any) -> float | None:
         return None
 
 
+def _safe_get(obj: Any, key: str) -> Any:
+    if obj is None:
+        return None
+    try:
+        if hasattr(obj, "get"):
+            return obj.get(key)  # type: ignore[call-arg]
+    except Exception:
+        pass
+    try:
+        return obj[key]  # type: ignore[index]
+    except Exception:
+        return None
+
+
 def get_history(ticker: str, period: str = DEFAULT_PERIOD, interval: str = "1d") -> pd.DataFrame:
     stock = yf.Ticker(ticker.upper())
     history = stock.history(period=period, interval=interval, auto_adjust=False)
@@ -67,30 +81,44 @@ def get_history(ticker: str, period: str = DEFAULT_PERIOD, interval: str = "1d")
 
 def get_stock_summary(ticker: str) -> dict[str, Any]:
     stock = yf.Ticker(ticker.upper())
-    info = stock.info or {}
-    fast_info = getattr(stock, "fast_info", {}) or {}
-    hist_5d = stock.history(period="5d", interval="1d")
+    try:
+        info = stock.info or {}
+    except Exception:
+        info = {}
+    try:
+        fast_info = getattr(stock, "fast_info", {}) or {}
+    except Exception:
+        fast_info = {}
+    try:
+        hist_5d = stock.history(period="5d", interval="1d")
+    except Exception:
+        hist_5d = pd.DataFrame()
+    if hist_5d.empty:
+        try:
+            hist_5d = yf.download(ticker.upper(), period="5d", interval="1d", progress=False, auto_adjust=False)
+        except Exception:
+            hist_5d = pd.DataFrame()
 
     current_price = _safe_float(
-        fast_info.get("last_price")
-        or info.get("currentPrice")
-        or info.get("regularMarketPrice")
+        _safe_get(fast_info, "last_price")
+        or _safe_get(info, "currentPrice")
+        or _safe_get(info, "regularMarketPrice")
     )
     previous_close = _safe_float(
-        fast_info.get("previous_close")
-        or info.get("previousClose")
-        or info.get("regularMarketPreviousClose")
+        _safe_get(fast_info, "previous_close")
+        or _safe_get(info, "previousClose")
+        or _safe_get(info, "regularMarketPreviousClose")
     )
-    open_price = _safe_float(fast_info.get("open") or info.get("open"))
-    volume = _safe_float(fast_info.get("last_volume") or info.get("volume"))
-    market_cap = _safe_float(fast_info.get("market_cap") or info.get("marketCap"))
-    week_52_high = _safe_float(fast_info.get("year_high") or info.get("fiftyTwoWeekHigh"))
-    week_52_low = _safe_float(fast_info.get("year_low") or info.get("fiftyTwoWeekLow"))
-    pe_ratio = _safe_float(info.get("trailingPE") or info.get("forwardPE"))
-    beta = _safe_float(info.get("beta"))
+    open_price = _safe_float(_safe_get(fast_info, "open") or _safe_get(info, "open"))
+    volume = _safe_float(_safe_get(fast_info, "last_volume") or _safe_get(info, "volume"))
+    market_cap = _safe_float(_safe_get(fast_info, "market_cap") or _safe_get(info, "marketCap"))
+    week_52_high = _safe_float(_safe_get(fast_info, "year_high") or _safe_get(info, "fiftyTwoWeekHigh"))
+    week_52_low = _safe_float(_safe_get(fast_info, "year_low") or _safe_get(info, "fiftyTwoWeekLow"))
+    pe_ratio = _safe_float(_safe_get(info, "trailingPE") or _safe_get(info, "forwardPE"))
+    beta = _safe_float(_safe_get(info, "beta"))
 
-    dividend_yield_raw = _safe_float(info.get("dividendYield"))
-    dividend_rate = _safe_float(info.get("dividendRate"))
+    dividend_yield_raw = _safe_float(_safe_get(info, "dividendYield"))
+    dividend_rate = _safe_float(_safe_get(info, "dividendRate"))
     dividend_yield = None
     if dividend_yield_raw is not None:
         # yFinance can return yield as a fraction (0.004) or already-percent-like value (0.38).
@@ -109,6 +137,11 @@ def get_stock_summary(ticker: str) -> dict[str, Any]:
             dividend_yield = dividend_yield_raw * 100 if dividend_yield_raw < 1 else dividend_yield_raw
 
     daily_change = None
+    if current_price is None and not hist_5d.empty:
+        current_price = _safe_float(hist_5d["Close"].iloc[-1])
+    if previous_close is None and len(hist_5d) >= 2:
+        previous_close = _safe_float(hist_5d["Close"].iloc[-2])
+
     if current_price is not None and previous_close is not None and previous_close != 0:
         daily_change = ((current_price - previous_close) / previous_close) * 100
     elif len(hist_5d) >= 2:

@@ -56,7 +56,25 @@ class ExplainRequest(BaseModel):
 def stock_summary(ticker: str) -> dict[str, Any]:
     data = get_stock_summary(ticker)
     if data["current_price"] is None:
-        raise HTTPException(status_code=404, detail="Ticker not found or unavailable.")
+        # Fallback: if metadata calls fail, derive core values from recent daily history.
+        history = get_history(ticker, period="1mo", interval="1d")
+        if not history.empty:
+            close = history["Close"].astype(float)
+            data["current_price"] = float(close.iloc[-1])
+            if len(close) >= 2 and close.iloc[-2] != 0:
+                data["previous_close"] = float(close.iloc[-2])
+                data["daily_change"] = float(((close.iloc[-1] - close.iloc[-2]) / close.iloc[-2]) * 100)
+            if data.get("open") is None and "Open" in history.columns:
+                data["open"] = float(history["Open"].astype(float).iloc[-1])
+            if data.get("volume") is None and "Volume" in history.columns:
+                data["volume"] = float(history["Volume"].astype(float).iloc[-1])
+            if data.get("52_week_high") is None:
+                data["52_week_high"] = float(close.max())
+            if data.get("52_week_low") is None:
+                data["52_week_low"] = float(close.min())
+        else:
+            # Return partial payload instead of hard failing so UI can still render.
+            data["ticker"] = ticker.upper()
     return data
 
 

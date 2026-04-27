@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+import os
 
 import numpy as np
 import pandas as pd
@@ -136,6 +137,8 @@ def _run_prophet(df: pd.DataFrame, horizon: int) -> ForecastResult | None:
     if Prophet is None:
         return None
     data = df[["Date", "Close"]].rename(columns={"Date": "ds", "Close": "y"})
+    # Prophet does not accept timezone-aware datetimes.
+    data["ds"] = pd.to_datetime(data["ds"]).dt.tz_localize(None)
     model = Prophet(daily_seasonality=True, weekly_seasonality=True)
     model.fit(data)
     future = model.make_future_dataframe(periods=horizon, freq="B")
@@ -216,12 +219,20 @@ def run_predictions(history: pd.DataFrame, horizon: int) -> dict[str, Any]:
         raise ValueError("Not enough historical data to train models.")
 
     results = _run_sklearn_models(df, horizon)
-    prophet_result = _run_prophet(df, horizon)
-    if prophet_result:
-        results.append(prophet_result)
-    lstm_result = _run_lstm(df, horizon)
-    if lstm_result:
-        results.append(lstm_result)
+    enable_heavy = os.getenv("ENABLE_HEAVY_MODELS", "0") == "1"
+    if enable_heavy:
+        try:
+            prophet_result = _run_prophet(df, horizon)
+        except Exception:
+            prophet_result = None
+        if prophet_result:
+            results.append(prophet_result)
+        try:
+            lstm_result = _run_lstm(df, horizon)
+        except Exception:
+            lstm_result = None
+        if lstm_result:
+            results.append(lstm_result)
 
     ranked = sorted(results, key=lambda r: r.rmse)
     best = ranked[0]
@@ -250,6 +261,6 @@ def run_predictions(history: pd.DataFrame, horizon: int) -> dict[str, Any]:
             }
             for r in ranked
         ],
-        "fallback_used": XGBRegressor is None or Prophet is None or tf is None,
+        "fallback_used": (not enable_heavy) or XGBRegressor is None or Prophet is None or tf is None,
     }
 
